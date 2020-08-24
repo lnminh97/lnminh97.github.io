@@ -230,6 +230,15 @@ def write_trajectory_file(x_list, y_list, v_list, t_list):
             trajectory_file.write('%3.3f, %3.3f, %2.3f, %6.3f\n' %\
                                   (x_list[i], y_list[i], v_list[i], t_list[i]))
 
+def write_cmd_file(throttle_list, brake_list, v_list, t_list):
+    create_controller_output_dir(CONTROLLER_OUTPUT_FOLDER)
+    file_name = os.path.join(CONTROLLER_OUTPUT_FOLDER, 'command.txt')
+
+    with open(file_name, 'w') as cmd_file:
+        for i in range(len(throttle_list)):
+            cmd_file.write('%.3f, %.3f, %.3f, %.3f\n' %\
+                           (throttle_list[i], brake_list[i], v_list[i], t_list[i]))
+
 def exec_waypoint_nav_demo(args):
     """ Executes waypoint navigation demo.
     """
@@ -398,11 +407,13 @@ def exec_waypoint_nav_demo(args):
         measurement_data, sensor_data = client.read_data()
         start_x, start_y, start_yaw = get_current_pose(measurement_data)
         send_control_command(client, throttle=0.0, steer=0, brake=1.0)
-        x_history     = [start_x]
-        y_history     = [start_y]
-        yaw_history   = [start_yaw]
-        time_history  = [0]
-        speed_history = [0]
+        x_history        = [start_x]
+        y_history        = [start_y]
+        yaw_history      = [start_yaw]
+        time_history     = [0]
+        speed_history    = [0]
+        throttle_history = [0]
+        brake_history    = [0]
 
         #############################################
         # Vehicle Trajectory Live Plotting Setup
@@ -641,6 +652,9 @@ def exec_waypoint_nav_demo(args):
                                  throttle=cmd_throttle,
                                  steer=cmd_steer,
                                  brake=cmd_brake)
+
+            throttle_history.append(cmd_throttle)
+            brake_history.append(cmd_brake)
 
             # Find if reached the end of waypoint. If the car is within
             # DIST_THRESHOLD_TO_LAST_WAYPOINT to the last waypoint,
