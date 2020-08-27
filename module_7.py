@@ -68,21 +68,22 @@ WEATHERID = {
 SIMWEATHER = WEATHERID["CLEARNOON"]     # set simulation weather
 
 PLAYER_START_INDEX = 1      # spawn index for player (keep to 1)
-FIGSIZE_X_INCHES   = 8      # x figure size of feedback in inches
-FIGSIZE_Y_INCHES   = 8      # y figure size of feedback in inches
+FIGSIZE_X_INCHES   = 4      # x figure size of feedback in inches
+FIGSIZE_Y_INCHES   = 6      # y figure size of feedback in inches
 PLOT_LEFT          = 0.1    # in fractions of figure width and height
 PLOT_BOT           = 0.1    
 PLOT_WIDTH         = 0.8
 PLOT_HEIGHT        = 0.8
 
 WAYPOINTS_FILENAME = 'racetrack_waypoints.txt'  # waypoint file to load
-DIST_THRESHOLD_TO_LAST_WAYPOINT = 2.0  # some distance from last position before
+DIST_THRESHOLD_TO_LAST_WAYPOINT = 10.0  # some distance from last position before
                                        # simulation ends
                                        
 # Path interpolation parameters
 INTERP_MAX_POINTS_PLOT    = 10   # number of points used for displaying
                                  # lookahead path
 INTERP_LOOKAHEAD_DISTANCE = 20   # lookahead in meters
+MIN_LOOKAHEAD_DISTANCE    = 5
 INTERP_DISTANCE_RES       = 0.01 # distance between interpolated points
 
 # controller output directory
@@ -221,6 +222,15 @@ def store_trajectory_plot(graph, fname):
     file_name = os.path.join(CONTROLLER_OUTPUT_FOLDER, fname)
     graph.savefig(file_name)
 
+def write_mod_waypoints(x_list, y_list, v_list):
+    current_directory = os.path.dirname(os.path.realpath(__file__))
+    file_name = os.path.join(current_directory, 'mod_racetrack_waypoints.txt')
+
+    with open(file_name, 'w') as waypoints_file:
+        for i in range(len(x_list)):
+            waypoints_file.write('%.3f, %.3f, %.3f\n' %\
+                                 (x_list[i], y_list[i], v_list[i]))
+
 def write_trajectory_file(x_list, y_list, v_list, t_list):
     create_controller_output_dir(CONTROLLER_OUTPUT_FOLDER)
     file_name = os.path.join(CONTROLLER_OUTPUT_FOLDER, 'trajectory.txt')
@@ -297,6 +307,12 @@ def exec_waypoint_nav_demo(args):
                                         delimiter=',',
                                         quoting=csv.QUOTE_NONNUMERIC))
             waypoints_np = np.array(waypoints)
+
+        # Speed up reference points
+        SPEEDUP_TIMES = 1.6
+        waypoints_np[:, 2] *= SPEEDUP_TIMES
+        write_mod_waypoints(waypoints_np[:, 0].tolist(),\
+                            waypoints_np[:, 1].tolist(), waypoints_np[:, 2].tolist()) 
 
         # Because the waypoints are discrete and our controller performs better
         # with a continuous path, here we will send a subset of the waypoints
@@ -422,7 +438,8 @@ def exec_waypoint_nav_demo(args):
         # The two feedback includes the trajectory feedback and
         # the controller feedback (which includes the speed tracking).
         lp_traj = lv.LivePlotter(tk_title="Trajectory Trace")
-        lp_1d = lv.LivePlotter(tk_title="Controls Feedback")
+        lp_1d = lv.LivePlotter(tk_title="Controls Feedback", rowspan=2, columnspan=2)
+        lp_e = lv.LivePlotter(tk_title="Controller Performnce")
         
         ###
         # Add 2D position / trajectory plot
@@ -474,7 +491,7 @@ def exec_waypoint_nav_demo(args):
         # Add 1D speed profile updater
         ###
         forward_speed_fig =\
-                lp_1d.plot_new_dynamic_figure(title="Forward Speed (m/s)")
+                lp_1d.plot_new_dynamic_figure(title="Forward Speed (m/s)", row=0, column=0)
         forward_speed_fig.add_graph("forward_speed", 
                                     label="forward_speed", 
                                     window_size=TOTAL_EPISODE_FRAMES)
@@ -483,25 +500,48 @@ def exec_waypoint_nav_demo(args):
                                     window_size=TOTAL_EPISODE_FRAMES)
 
         # Add throttle signals graph
-        throttle_fig = lp_1d.plot_new_dynamic_figure(title="Throttle")
+        throttle_fig = lp_1d.plot_new_dynamic_figure(title="Throttle", row=0, column=1)
         throttle_fig.add_graph("throttle", 
                               label="throttle", 
                               window_size=TOTAL_EPISODE_FRAMES)
-        # Add brake signals graph
-        brake_fig = lp_1d.plot_new_dynamic_figure(title="Brake")
-        brake_fig.add_graph("brake", 
-                              label="brake", 
-                              window_size=TOTAL_EPISODE_FRAMES)
         # Add steering signals graph
-        steer_fig = lp_1d.plot_new_dynamic_figure(title="Steer")
+        steer_fig = lp_1d.plot_new_dynamic_figure(title="Steer", row=1, column=1)
         steer_fig.add_graph("steer", 
                               label="steer", 
                               window_size=TOTAL_EPISODE_FRAMES)
+        # Add brake signals graph
+        brake_fig = lp_1d.plot_new_dynamic_figure(title="Brake", row=1, column=0)
+        brake_fig.add_graph("brake", 
+                              label="brake", 
+                              window_size=TOTAL_EPISODE_FRAMES)
+        
+        ###
+        # Add 1D speed profile updater
+        ###
+        # Add error speed signal graph
+        error_speed_fig = lp_e.plot_new_dynamic_figure(title="Error Speed (m/s)")
+        error_speed_fig.add_graph("error_speed",
+                                  label="error_speed",
+                                  window_size=TOTAL_EPISODE_FRAMES)
+        # Add cross error signal graph
+        cross_error_fig = lp_e.plot_new_dynamic_figure(title="Cross Error (m)")
+        cross_error_fig.add_graph("cross_error",
+                                  label="cross_error",
+                                  window_size=TOTAL_EPISODE_FRAMES)
+        # Add yaw and desired yaw signal
+        yaw_fig = lp_e.plot_new_dynamic_figure(title="Yaw and Desired Yaw (rad)")
+        yaw_fig.add_graph("yaw",
+                          label="yaw",
+                          window_size=TOTAL_EPISODE_FRAMES)
+        yaw_fig.add_graph("desried_yaw",
+                          label="desried_yaw",
+                          window_size=TOTAL_EPISODE_FRAMES)
 
         # live plotter is disabled, hide windows
         if not enable_live_plot:
             lp_traj._root.withdraw()
-            lp_1d._root.withdraw()        
+            lp_1d._root.withdraw()
+            lp_e._root.withdraw()        
 
         # Iterate the frames until the end of the waypoints is reached or
         # the TOTAL_EPISODE_FRAMES is reached. The controller simulation then
@@ -580,14 +620,18 @@ def exec_waypoint_nav_demo(args):
             # Once the closest index is found, return the path that has 1
             # waypoint behind and X waypoints ahead, where X is the index
             # that has a lookahead distance specified by 
-            # INTERP_LOOKAHEAD_DISTANCE
+            # N * T_SAMP * speed, min = 5 m
+            N      = 10
+            T_SAMP = 0.033
+            lookahead_distance = N * T_SAMP * current_speed
+            lookahead_distance = np.fmax(lookahead_distance, MIN_LOOKAHEAD_DISTANCE)
             waypoint_subset_first_index = closest_index - 1
             if waypoint_subset_first_index < 0:
                 waypoint_subset_first_index = 0
 
             waypoint_subset_last_index = closest_index
             total_distance_ahead = 0
-            while total_distance_ahead < INTERP_LOOKAHEAD_DISTANCE:
+            while total_distance_ahead < lookahead_distance:
                 total_distance_ahead += wp_distance[waypoint_subset_last_index]
                 waypoint_subset_last_index += 1
                 if waypoint_subset_last_index >= waypoints_np.shape[0]:
@@ -639,12 +683,21 @@ def exec_waypoint_nav_demo(args):
                 brake_fig.roll("brake", current_timestamp, cmd_brake)
                 steer_fig.roll("steer", current_timestamp, cmd_steer)
 
+                error_speed_fig.roll("error_speed", 
+                                     current_timestamp,
+                                     controller._desired_speed - current_speed)
+                cross_error_fig.roll("cross_error", current_timestamp, controller._cross_error)
+                yaw_fig.roll("yaw", current_timestamp, current_yaw)
+                yaw_fig.roll("desried_yaw", current_timestamp, controller._desired_yaw)
+                
+
                 # Refresh the live plot based on the refresh rate 
                 # set by the options
                 if enable_live_plot and \
                    live_plot_timer.has_exceeded_lap_period():
                     lp_traj.refresh()
                     lp_1d.refresh()
+                    lp_e.refresh()
                     live_plot_timer.lap()
 
             # Output controller command to CARLA server

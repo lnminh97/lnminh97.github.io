@@ -16,7 +16,14 @@ class pid():
 	def set_t_samp(self, t_samp):
 		self.t_samp = t_samp
 
-	def make_control(self, u_k_1=0, e_k=0, e_k_1=0, e_k_2=0):
+	def make_control(self, u_k_1, e):
+		e_k   = e[0]
+		e_k_1 = e[1]
+		if len(e) == 3:
+			e_k_2 = e[2]
+		else:
+			e_k_2 = 0
+			
 		u_k = (self.P + self.I * self.t_samp / 2 + self.D / self.t_samp) * e_k + \
 			  (-self.P + self.I * self.t_samp / 2 - 2 * self.D / self.t_samp) * e_k_1 + \
 			  (self.D / self.t_samp) * e_k_2 + \

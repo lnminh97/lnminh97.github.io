@@ -9,6 +9,7 @@ import numpy as np
 import pid
 import mrac
 import model_estimator
+import stanley_controller
 
 # Car dimensions
 WHEEL_BASE     = 2.72
@@ -27,23 +28,24 @@ INIT_GUESS_THROTTLE = np.array([[0.1517, -0.149],
 
 class Controller2D(object):
     def __init__(self, waypoints):
-        self.vars                = cutils.CUtils()
-        self._current_x          = 0
-        self._current_y          = 0
-        self._current_yaw        = 0
-        self._current_speed      = 0
-        self._desired_speed      = 0
-        self._desired_yaw        = 0
-        self._cross_error        = 0
-        self._current_frame      = 0
-        self._current_timestamp  = 0
-        self._start_control_loop = False
-        self._init_param         = False
-        self._set_throttle       = 0
-        self._set_brake          = 0
-        self._set_steer          = 0
-        self._waypoints          = waypoints
-        self._conv_rad_to_steer  = 180.0 / 70.0 / np.pi
+        self.vars                   = cutils.CUtils()
+        self._current_x             = 0
+        self._current_y             = 0
+        self._current_yaw           = 0
+        self._current_speed         = 0
+        self._desired_speed         = 0
+        self._desired_yaw           = 0
+        self._cross_error           = 0
+        self._lookahead_cross_error = 0
+        self._current_frame         = 0
+        self._current_timestamp     = 0
+        self._start_control_loop    = False
+        self._init_param            = False
+        self._set_throttle          = 0
+        self._set_brake             = 0
+        self._set_steer             = 0
+        self._waypoints             = waypoints
+        self._conv_rad_to_steer     = 180.0 / 70.0 / np.pi
 
     def update_values(self, x, y, yaw, speed, timestamp, frame):
         self._current_x         = x
@@ -58,28 +60,30 @@ class Controller2D(object):
     def update_desired_motion(self):
         min_idx       = 0
         min_dist      = float("inf")
-        desired_speed = 0
-        desired_yaw   = 0
-
+    
         # Get the reference point based on the shortest distance between car and waypoints
         for i in range(len(self._waypoints)):
-            dist = np.linalg.norm(np.array([
-                    self._waypoints[i][0] - self._current_x,
-                    self._waypoints[i][1] - self._current_y]))
+            dist = np.linalg.norm(np.array([self._waypoints[i][0] - self._current_x,
+                                            self._waypoints[i][1] - self._current_y]))
             if dist < min_dist:
                 min_dist = dist
                 min_idx = i
-        if min_idx < len(self._waypoints)-1:
-            desired_speed = self._waypoints[min_idx][2]
-            desired_yaw = np.arctan2(self._waypoints[min_idx+1][1] - self._waypoints[min_idx][1], \
-                                     self._waypoints[min_idx+1][0] - self._waypoints[min_idx][0])
-        else:
-            desired_speed = self._waypoints[-1][2]
-            desired_yaw = np.arctan2(self._waypoints[-1][1] - self._waypoints[-2][1], \
+
+        self._desired_speed = self._waypoints[min_idx][2]
+        self._desired_yaw = np.arctan2(self._waypoints[-1][1] - self._waypoints[-2][1], \
                                      self._waypoints[-1][0] - self._waypoints[-2][0])
-        self._desired_speed = desired_speed
-        self._cross_error = min_dist
-        self._desired_yaw = desired_yaw
+
+        direction = np.array([np.cos(self._current_yaw), np.sin(self._current_yaw)])
+        r = np.array([self._waypoints[min_idx][0] - self._current_x,
+                      self._waypoints[min_idx][1] - self._current_y])
+        cross_error_sign = np.sign(np.cross(direction, r))
+        # cross_error_sign = - np.sign(np.tan(self._current_yaw) * self._waypoints[min_idx][0] -\
+        #                            self._waypoints[min_idx][1] -
+        #                            np.tan(self._current_yaw) * self._current_x +\
+        #                            self._current_y)
+        lookahead_cross_error = np.linalg.norm(r)
+        self._lookahead_cross_error = cross_error_sign * lookahead_cross_error
+        self._cross_error           = cross_error_sign * min_dist
 
     def update_waypoints(self, new_waypoints):
         self._waypoints = new_waypoints
@@ -116,7 +120,7 @@ class Controller2D(object):
         self.update_desired_motion()
         v_desired       = self._desired_speed
         yaw_desired     = self._desired_yaw
-        cross_error     = self._cross_error
+        cross_error     = self._lookahead_cross_error
         t               = self._current_timestamp
         waypoints       = self._waypoints
         throttle_output = 0
@@ -167,13 +171,16 @@ class Controller2D(object):
             # self.vars.create_var('throttle_e_previous', 0.0)
             # self.vars.create_var('throttle_e_previous_2', 0.0)
 
-
-
             # Brake controller vars
             self.vars.create_var('brake_previous', 0.0)
-            self.vars.create_var('brake_e_previous', 0.0)
-            self.vars.create_var('brake_e_previous_2', 0.0)
+            self.vars.create_var('brake_e_previous', np.zeros(2))
             self.vars.create_var('last_brake', False)
+
+            # Stanley controller vars
+            self.vars.create_var('e_yaw_previous', np.zeros(2))
+            self.vars.create_var('cross_error_previous', np.zeros(2))
+            self.vars.create_var('u_yaw_previous', 0.0)
+            self.vars.create_var('u_cross_previous', 0.0)
 
             self._init_param = True
 
@@ -287,7 +294,6 @@ class Controller2D(object):
                 self.vars.plant = theta[[2, 3, 0, 1]].reshape((2, 2))
                 self.vars.P_k_1 = estimated_model.get_P_k_1()
 
-
             # Model Reference Control
             throttle_controller = mrac.mrac(THROTTLE_REF_MODEL, self.vars.plant)
 
@@ -310,16 +316,14 @@ class Controller2D(object):
                 brake_I = 0.9738
                 brake_D = 0.3308
                 brake_controller = pid.pid(T_SAMP, brake_P, brake_I, brake_D)
-                brake_k_1   = self.vars.brake_previous
-                brake_e_k_1 = self.vars.brake_e_previous
-                brake_e_k_2 = self.vars.brake_e_previous_2
+                
+                brake_e = np.insert(self.vars.brake_e_previous, 0, v - v_desired)
 
-                brake_e_k = v - v_desired
+                brake_output = brake_controller.make_control(self.vars.brake_previous, brake_e)
 
-                brake_output = brake_controller.make_control(brake_k_1, brake_e_k, brake_e_k_1, brake_e_k_2)
-                self.vars.brake_previous     = brake_output
-                self.vars.brake_e_previous_2 = self.vars.brake_e_previous
-                self.vars.brake_e_previous   = brake_e_k
+                self.vars.brake_previous      = brake_output
+                self.vars.brake_e_previous[1] = self.vars.brake_e_previous[0]
+                self.vars.brake_e_previous[0] = v - v_desired
 
                 if brake_output > 0:
                     self.vars.last_brake = True
@@ -341,7 +345,33 @@ class Controller2D(object):
             """
             
             # Change the steer output with the lateral controller. 
-            steer_output    = 0
+            # Lateral Controller is based on Stanley Controller
+            steer_yaw_P   = 1
+            steer_yaw_I   = 0.15
+            steer_yaw_D   = 0.9
+            steer_cross_P = 1.281
+            steer_cross_I = 0.25
+            steer_cross_D = 1.5
+            steer_K_s     = 10
+            steer_controller = stanley_controller.stanley_controller(steer_yaw_P, steer_yaw_I, steer_yaw_D,\
+                                                                     steer_cross_P, steer_cross_I, steer_cross_D,\
+                                                                     steer_K_s)
+
+            # e_yaw = np.array([yaw_desired - yaw, self.vars.e_yaw_previous])
+            e_yaw = np.insert(self.vars.e_yaw_previous, 0, yaw_desired - yaw)
+            error = np.insert(self.vars.cross_error_previous, 0, cross_error)
+            # error = np.array([cross_error, self.vars.cross_error_previous])
+
+            steer_output = steer_controller.make_control(self.vars.u_yaw_previous,\
+                                                         self.vars.u_cross_previous,\
+                                                         e_yaw, v, error)
+
+            self.vars.u_yaw_previous, self.vars.u_cross_previous = steer_controller.get_u_previous()
+
+            self.vars.e_yaw_previous[1]       = self.vars.e_yaw_previous[0]
+            self.vars.e_yaw_previous[0]       = yaw_desired - yaw
+            self.vars.cross_error_previous[1] = self.vars.cross_error_previous[0]
+            self.vars.cross_error_previous[0] = cross_error
 
             ######################################################
             # SET CONTROLS OUTPUT
